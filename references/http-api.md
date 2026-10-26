@@ -19,7 +19,7 @@ python3 scripts/syncnext.py status
 
 The **安裝 Agent Skill** settings row uses the App's standard QR Code view to open `http://DEVICE:11330/agent.html`. This bundled static page remains available while the API is disabled. It links to the independent public [Skill repository](https://github.com/qoli/syncnext-control) and provides a copyable installation prompt with the URL of the device serving the page. The Skill can be updated from that repository independently of App releases.
 
-**顯示 Agent 操作通知** defaults on and is persisted locally. Every request to the enabled `/api/v1` API invokes the existing `MessageStatus` notification component with a readable operation name, including status/operation polling, search, episodes, quality probe, playback, seek, stop, cancellation and session clear. The component retains its normal display duration and duplicate-message behavior. Turning the setting off suppresses these Agent notifications without changing API behavior. Static setup-page requests are not control API operations.
+**顯示 Agent 操作通知** defaults on and is persisted locally. Accepted search, episode, quality-probe and playback operations show one start notification and one terminal notification (completed, partially completed, failed or cancelled), keyed by operation ID and lifecycle phase. Cancellation notification is emitted when the task actually terminates; repeated cancellation requests do not add notifications. Successful stop, seek and session-clear commands show one notification after completion. GET requests, including status, history, sources, playback and operation polling, stay quiet; rejected requests do not produce notifications. Turning the setting off suppresses these Agent notifications without changing API behavior. Notifications retain the existing three-second duration. Repeated shared-component messages do not refresh their lifetime or create additional HUDs/timers; expiry only affects that message instance. Static setup-page requests are not control API operations.
 
 ## Routes
 
@@ -29,6 +29,7 @@ All paths below are relative to `/api/v1`. Responses are JSON with `Cache-Contro
 | --- | --- |
 | `GET /status` | `apiVersion`, `ready`, `deviceName`, `capabilities`, `handleLifetime` |
 | `GET /sources` | `sources: [{id, name}]`; enabled searchable source snapshot |
+| `GET /history?page=1` | `page`, `pageSize: 1000`, `totalCount`, `nextPage`, `records`; saved playback history, newest first |
 | `POST /search` | `{keyword, sourceIds?}` → `202` search operation; omitted `sourceIds` searches all enabled sources |
 | `GET /operations/{id}` | Current operation snapshot, including partial search results while running |
 | `DELETE /operations/{id}` | Request cancellation; `cancelling` until work observes cancellation; never undoes playback already started |
@@ -41,6 +42,61 @@ All paths below are relative to `/api/v1`. Responses are JSON with `Cache-Contro
 | `DELETE /session` | Cancel operations and invalidate item, line, episode and operation handles |
 
 Source IDs are hashes of the App's source identity, so subscription URLs containing credentials need not leave the App. Unknown requested source IDs fail explicitly with `source_not_found`; the App never broadens a restricted search. Source settings are read anew for each search. Source ordering is not a quality ranking.
+
+## Playback history
+
+`GET /history` defaults to page 1. `page` must be a single positive integer whose
+offset fits the platform integer range; malformed, repeated or unsupported query
+parameters return `400 invalid_page`. Page size is fixed at 1000, with no custom
+page-size parameter. Empty history and pages past the last record return `200`,
+an empty `records` array and `nextPage: null`.
+
+```json
+{
+  "page": 1,
+  "pageSize": 1000,
+  "totalCount": 1001,
+  "nextPage": 2,
+  "records": [{
+    "id": "OPAQUE_HISTORY_ID",
+    "title": "Example",
+    "episodeTitle": "第02集",
+    "coverURL": "https://example.invalid/cover.jpg",
+    "sourceType": "vod",
+    "sourceName": "Example source",
+    "positionSeconds": 600,
+    "durationSeconds": 2400,
+    "progress": 0.25,
+    "playedAt": "2026-10-25T12:00:00Z"
+  }]
+}
+```
+
+The API reads the App's active database through `AppDatabaseAdapter`, including
+episodes hidden from the home screen. It does not read the 12-item recent-play
+UI cache or fetch CloudKit directly. The database query selects scalar fields
+without loading screenshots or restoration payloads. Records are ordered by
+timestamp descending, with a persistent-ID tie breaker (legacy object ID or V2
+unique key). Each request reads
+current data; pages are not a frozen export and concurrent history changes can
+shift page boundaries. `totalCount` counts all persisted playback records at the
+time of that request. History IDs are stable SHA-256 hashes of persisted record
+identities, which can otherwise contain playback URLs. They are not item or
+episode handles usable with `play`. Session clear does not delete history.
+
+Nullable record fields stay `null` when absent. An invalid time scale or negative
+position produces `positionSeconds: null`; nonpositive or nonfinite duration is
+`null`. `progress` is position/duration clamped to 0–1, or `null` when either is
+unknown. `playedAt` is the timestamp saved when playback starts, not an event log
+of progress updates. Replaying can update an existing record: neither record
+count nor saved position establishes view count or total time watched. Records
+have no viewer identity, and `sourceType` denotes a technical kind such as
+`vod`/`plugin`, not a subscription/provider identity. Preference conclusions belong
+to the calling Agent and must remain distinguishable from these observations.
+
+Only the listed record fields are exported. Resolved playback URLs, credentials,
+source extension data, restoration payloads, screenshots and local paths are
+excluded. `status.capabilities` advertises `history` on supporting App versions.
 
 ## Asynchronous operations
 
@@ -91,6 +147,8 @@ Item/episode/line handles are process-local and invalidate on background entry, 
 
 The probe invokes the chosen episode's existing resolver, preserving its required HTTP headers, then calls Hybrid's AetherEngine demux-only FFmpeg probe on a background task. HLS input uses the engine's existing reader. It does not create a playback session, AVPlayer/AVPlayerItem, renderer or audio session. Cancellation is forwarded through the engine's probe cancellation token. Normal HTTP VOD, T4 and website/embedded cat plugin episodes expose resolvers. Other episode providers return `probeSupported: false` and `422 probe_unsupported`. Resolution/container errors produce failed operations; missing stream metadata stays unknown. The App does not implement a second media parser.
 
+Metadata inspection has a fixed 30-second monotonic deadline, starting before the engine's first input operation and excluding episode URL resolution. The engine interrupts its I/O and finishes cleanup before the operation becomes `failed` with `errors[].code: "probe_timeout"` and no measured result. Explicit cancellation remains `cancelled`. The existing engine probe depth is retained; the App adds only the time limit. This deadline is separate from the client's per-request and observation timeouts.
+
 The probe's `result` separates `declared` episode/line labels from `measured` data:
 
 | Measured field | Meaning |
@@ -130,10 +188,10 @@ Build the Debug App for an arm64 tvOS Simulator with Xcode, then run from the re
 python3 Scripts/run_local_agent_api_simulator.py --app /absolute/path/to/Debug-appletvsimulator/SyncNext.app
 ```
 
-The runner requires installed `ffmpeg` and the tvOS 27.0 Simulator runtime. It creates and deletes its own temporary Apple TV Simulator, with isolated HTTP/WebSocket ports. It never targets `SyncNext Data`. It generates MP4, HLS and MKV media and local VOD/T4 fixtures, then drives this exact Skill client through search, episode choice, metadata probing, authenticated T4 resolution, real playback, seek, stop and switching to another source/episode. It checks idle stop, rejection of malformed stop requests, playback progress, partial/all-source errors, successful empty results, in-flight engine-probe cancellation, unknown IDs, token-free requests, disabled state and the bundled setup page. The native Debug case checks notification suppression/display and persistence, the App's source-diagnostic resolution label, selected episode, mounted AVPlayer clock progress and cleanup. Hybrid's AVKit carrier dimensions do not represent source resolution.
+The runner requires installed `ffmpeg` and the tvOS 27.0 Simulator runtime. It creates and deletes its own temporary Apple TV Simulator, with isolated HTTP/WebSocket ports. It never targets `SyncNext Data`. The native case checks empty history and the legacy scalar-field projection with offsets and a deliberately invalid restoration payload, then persists 1001 synthetic history records, including hidden episodes, tied timestamps and unknown time fields. The runner verifies the 1000/1 page boundary, stable tie ordering, no duplicate/missing records, progress values, exclusion of private fields, pages past the end and invalid page queries through the real HTTP listener and CLI. The fixture records are removed on case exit. It also generates MP4, HLS and MKV media and local VOD/T4 fixtures, then drives this exact Skill client through search, episode choice, metadata probing, authenticated T4 resolution, real playback, seek, stop and switching to another source/episode. It checks idle stop, rejection of malformed stop requests, playback progress, partial/all-source errors, successful empty results, in-flight engine-probe cancellation, unknown IDs, token-free requests, disabled state and the bundled setup page. The native Debug case checks notification suppression/display and persistence, the App's source-diagnostic resolution label, selected episode, mounted AVPlayer clock progress and cleanup. Hybrid's AVKit carrier dimensions do not represent source resolution.
 
 Evidence is retained under `.artifacts/local-agent-api/RUN_ID/` (JSON, fixture requests, App console). For visual acceptance, first create/boot a task-owned temporary device and attach its display with Xcode's device interaction session; pass `--temporary-simulator-udid UUID --await-ui-check`. The runner pauses first at `ui-stop-checkpoint.json` to inspect the closed player and then at `ui-checkpoint.json` to inspect the new playback. Capture the current screenshot/hierarchy for each, writing the corresponding `ui-stop-check.json` or `ui-check.json` containing `{"passed":true}` only after inspection, or `false` with the observed failure. End the interaction session before submitting the final check. The runner then completes native assertions and deletes the temporary device. Do not pass a shared or retained device: the temporary-UDID option transfers ownership for deletion.
 
-`python3 Tests/LocalAgent/test_client.py` separately verifies URL-only connection without an authorization header, the stop request/response, partial-result exit codes, cancellation on interrupt, no resubmission after an HTTP error, and stopping observation without cancelling a playback operation. The source checkout's existing search/session and local-server tests cover their respective engines.
+`python3 Tests/LocalAgent/test_client.py` separately verifies history page selection, URL-only connection without an authorization header, the stop request/response, partial-result exit codes, cancellation on interrupt, no resubmission after an HTTP error, and stopping observation without cancelling a playback operation. The source checkout's existing search/session and local-server tests cover their respective engines.
 
 This acceptance proves the local App/Skill/engine flow with controlled sources. It does not prove availability of third-party subscriptions or physical Apple TV playback.

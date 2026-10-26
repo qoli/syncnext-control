@@ -67,6 +67,8 @@ def parser():
     commands = result.add_subparsers(dest="command", required=True)
     for name in ("status", "sources", "playback", "stop", "clear"):
         commands.add_parser(name)
+    history = commands.add_parser("history", help="Read playback history, 1000 records per page")
+    history.add_argument("--page", type=int, default=1, help="Page number, starting at 1 (default: 1)")
     search = commands.add_parser("search")
     search.add_argument("keyword")
     search.add_argument("--source-id", action="append")
@@ -84,6 +86,8 @@ def parser():
 def command_request(args):
     if args.command in ("status", "sources", "playback"):
         return "GET", args.command, None
+    if args.command == "history":
+        return "GET", "history?page=" + str(args.page), None
     if args.command == "search":
         body = {"keyword": args.keyword}
         if args.source_id is not None:

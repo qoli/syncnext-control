@@ -1,6 +1,6 @@
 # Syncnext Control
 
-讓本地 Agent 使用 Syncnext 的搜尋、來源品質探測、選集、播放、關閉播放及播放狀態 API。
+讓本地 Agent 使用 Syncnext 的播放歷史、搜尋、來源品質探測、選集、播放、關閉播放及播放狀態 API。
 
 需要支援無令牌本地 HTTP API v1 的 Syncnext，以及 Python 3.10 以上版本；client 只使用 Python 標準庫。
 
@@ -37,7 +37,7 @@ python3 ~/.agents/skills/syncnext-control/scripts/syncnext.py status
 
 不需要 API 令牌。Agent 必須能連接顯示的 HTTP 地址；`127.0.0.1` 指向 Agent 自己所在的主機。
 
-API 操作預設會顯示 App 通知，可在同一區塊關閉「顯示 Agent 操作通知」。
+任務開始及結束時預設會顯示 App 通知，讀取狀態與任務進度輪詢不會彈出通知；可在同一區塊關閉「顯示 Agent 操作通知」。
 
 ## 使用
 
@@ -49,6 +49,28 @@ Agent 應依 [SKILL.md](SKILL.md) 比對作品與集數，以實際探測結果�
 
 完整路由、限制與 client 選項見 [HTTP API](references/http-api.md)。
 
+讀取播放歷史：
+
+```bash
+python3 scripts/syncnext.py history
+python3 scripts/syncnext.py history --page 2
+```
+
+每頁固定最多 1000 筆，從第 1 頁開始；依回應的 `nextPage` 繼續讀取，直到 `null`。
+紀錄保存的是續播位置，不能把播放位置當作實際觀看時長，或把紀錄筆數當作觀看次數。
+
 ## 維護
 
-公開發佈位置為 [qoli/syncnext-control](https://github.com/qoli/syncnext-control)。Syncnext App 倉庫內的 `Skills/syncnext-control` 保留同一套檔案供整合驗收；修改 API 或 Skill 時，應同步這份快照。
+公開發佈位置為 [qoli/syncnext-control](https://github.com/qoli/syncnext-control)。Syncnext App 倉庫內的 `Skills/syncnext-control` 是發佈來源；修改 API 時，在同一變更中更新這份 Skill 與 client。
+
+App 的 Fastlane `ios release` 與 `ios test` 會在 IPA 驗證完成、上傳前執行 `Scripts/publish_syncnext_skill.py`。腳本複製來源中 Git 追蹤的檔案，以候選副本執行 client HTTP 測試，通過後同步到相鄰的 `SyncnextSkill` checkout，使用固定訊息 `🔄 chore(skill): sync from Syncnext <App HEAD>` 建立 commit，再 push 到該 checkout 目前分支的 upstream。測試或 push 失敗會停止 lane。
+
+也可在 **Syncnext App 倉庫根目錄**單獨執行發佈：
+
+```bash
+python3 Scripts/publish_syncnext_skill.py
+# 目標 checkout 不在相鄰目錄時：
+python3 Scripts/publish_syncnext_skill.py --repository /path/to/syncnext-control
+```
+
+目標必須是已設定 upstream 且工作樹乾淨的 Git checkout。內容相同時不建立新 commit；前次 push 失敗時，重跑會補推既有 commit。腳本不切換分支或拉取遠端變更；遇到分歧時，先處理 checkout 再重新發佈。
