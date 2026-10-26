@@ -1,6 +1,6 @@
 # Syncnext Control
 
-讓本地 Agent 使用 Syncnext 的播放歷史、搜尋、來源品質探測、選集、播放、關閉播放及播放狀態 API。
+讓本地 Agent 使用 Syncnext 的播放歷史、搜尋、打開播放列表、來源品質探測、選集、播放、關閉播放及播放狀態 API。
 
 需要支援無令牌本地 HTTP API v1 的 Syncnext，以及 Python 3.10 以上版本；client 只使用 Python 標準庫。
 
@@ -49,11 +49,21 @@ Agent 應依 [SKILL.md](SKILL.md) 比對作品與集數，以實際探測結果�
 
 完整路由、限制與 client 選項見 [HTTP API](references/http-api.md)。
 
+在電視上打開搜尋結果的播放列表：
+
+```bash
+python3 scripts/syncnext.py open-playlist ITEM_ID
+```
+
+`ITEM_ID` 使用本次 App 搜尋結果的 ID；這會打開原有播放列表頁，讓你自行選集，不會開始播放。若正在播放，先執行 `stop`。需要 App 的 `status.capabilities` 包含 `openPlaylist`。
+
 讀取播放歷史：
 
 ```bash
 python3 scripts/syncnext.py history
 python3 scripts/syncnext.py history --page 2
+python3 scripts/syncnext.py activities
+python3 scripts/syncnext.py activities --page 2
 ```
 
 每頁固定最多 1000 筆，從第 1 頁開始；依回應的 `nextPage` 繼續讀取，直到 `null`。

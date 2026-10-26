@@ -1,6 +1,6 @@
 ---
 name: syncnext-control
-description: Search the user's running Syncnext, read paged playback history, inspect episodes and source quality, start or stop playback, and query playback through its local HTTP API. Use for media tasks on a reachable Syncnext instance.
+description: Search the user's running Syncnext, open a work's playlist on the TV, read paged playback history, inspect episodes and source quality, start or stop playback, and query playback through its local HTTP API. Use for media tasks on a reachable Syncnext instance.
 ---
 
 # Syncnext Control
@@ -18,7 +18,10 @@ python3 scripts/syncnext.py status
 python3 scripts/syncnext.py sources
 python3 scripts/syncnext.py history
 python3 scripts/syncnext.py history --page 2
+python3 scripts/syncnext.py activities
+python3 scripts/syncnext.py activities --page 2
 python3 scripts/syncnext.py search '反黑先鋒'
+python3 scripts/syncnext.py open-playlist ITEM_ID
 python3 scripts/syncnext.py episodes ITEM_ID
 python3 scripts/syncnext.py probe EPISODE_ID
 python3 scripts/syncnext.py play EPISODE_ID
@@ -28,9 +31,15 @@ python3 scripts/syncnext.py stop
 
 Use IDs returned by this App instance. Items, episodes and lines are temporary handles; request fresh results after an App restart, background transition, API disable, or session clear. Source IDs identify enabled sources without exposing subscription URLs. `search --source-id ID` restricts the search to that source; repeat it to select several. Without the flag, the App searches all enabled searchable sources.
 
-When asked to review viewing history or preferences, use `history` and follow `nextPage` until it is `null`; each page contains up to 1000 records. History includes older episodes hidden from the home screen. These are saved resume positions, not viewing sessions: position and progress do not measure time actually watched, and record counts do not measure repeat views. `playedAt` is the saved playback-start timestamp. Missing values remain unknown. These records have no viewer identity, and `sourceType` is a technical source kind rather than a cat-source subscription or provider. Keep preference inferences distinct from observed records. Each page reads current App data, so changes during pagination can shift records between pages.
+For viewing-preference analysis, use `activities` and follow `nextPage` until it is `null`. Each record is one player launch, with an immutable confirmed start position, last position, effective playback seconds, time spent at each observed rate, and an archived TMDB JSON object when available. The query is local and does not fetch TMDB. Activity count does not mean complete view count; reopening can continue the same viewing. `B-A` and start/end wall time do not measure time actually watched. An empty archive means no activities were collected, not that nothing was watched. Unknown values stay unknown. V2 storage is required; `unsupported_database` is explicit and must not be replaced with invented sessions from checkpoints. Records have no viewer identity. Keep preference inferences distinct from these observations.
+
+Use `history` for saved resume checkpoints, including older episodes hidden from the home screen, and follow its `nextPage` too. Positions/progress do not measure viewing time, record counts do not measure repeat views, and `playedAt` is the saved playback-start timestamp. The technical `sourceType` is not a provider identity. Each paged request reads current data, so concurrent writes can shift page boundaries.
 
 Search results are candidates, not proof of the intended work. Match title and the available year/description, then fetch episodes. Resolve ambiguity that changes the work or episode before playing. When the user has asked for a specific work and episode and the match is clear, execute playback within that request. Successful `play` means the real player reached readiness; query `playback` to report its current state and progress.
+
+When asked to open a work's playlist on the TV, use `open-playlist ITEM_ID` with the matched search result. It presents the App's normal playlist screen without choosing or playing an episode. `opened: true` confirms screen presentation; episode loading and source errors remain in the normal App UI. `episodes ITEM_ID` only returns data to the Agent. If a player is mounted, `stop` first. Check `status.capabilities` for `openPlaylist` when working with an older App.
+
+For specifications of what is playing now, use `playback.details` (`playbackDetails` capability). It reads the current session without another probe. Inspect the source container, primary video codec/profile, dimensions, frame rate, declared bitrate, pixel format/depth, color and HDR/Dolby Vision, all audio/subtitle tracks and selections, tags and chapters. `details.playback` separately describes actual routing, decoding, display format and available live telemetry. Keep source bitrate, measured playback bitrate and network throughput distinct; native HLS telemetry may use declared variant bandwidth. Unknown fields are `null`, and `details` is `null` when idle. A false Atmos/DTS:X detection flag does not prove absence. This is the loaded session's metadata, not a full-file ffprobe scan; unexposed packet/frame counts and arbitrary container tags are unavailable.
 
 To switch content, identify the new episode first. If `playback` shows a mounted player, run `stop`, then `play NEW_EPISODE_ID` and query `playback`. `stop` closes the player through the App's normal exit flow and returns after dismissal; it also succeeds when already idle. It preserves episode handles. A running play operation that has not mounted a player must be cancelled with `cancel ID` before switching. Session `clear` and operation cancellation do not close an already playing item.
 

@@ -67,14 +67,18 @@ def parser():
     commands = result.add_subparsers(dest="command", required=True)
     for name in ("status", "sources", "playback", "stop", "clear"):
         commands.add_parser(name)
-    history = commands.add_parser("history", help="Read playback history, 1000 records per page")
-    history.add_argument("--page", type=int, default=1, help="Page number, starting at 1 (default: 1)")
+    for name, help_text in (("history", "Read resume checkpoints"),
+                            ("activities", "Read viewing activities with archived TMDB JSON")):
+        history = commands.add_parser(name, help=help_text + ", 1000 records per page")
+        history.add_argument("--page", type=int, default=1, help="Page number, starting at 1 (default: 1)")
     search = commands.add_parser("search")
     search.add_argument("keyword")
     search.add_argument("--source-id", action="append")
     episodes = commands.add_parser("episodes")
     episodes.add_argument("id")
     episodes.add_argument("--line-id")
+    open_playlist = commands.add_parser("open-playlist", help="Open an item's playlist on the TV without starting playback")
+    open_playlist.add_argument("id")
     for name in ("probe", "play", "operation", "cancel"):
         command = commands.add_parser(name)
         command.add_argument("id")
@@ -88,6 +92,8 @@ def command_request(args):
         return "GET", args.command, None
     if args.command == "history":
         return "GET", "history?page=" + str(args.page), None
+    if args.command == "activities":
+        return "GET", "viewing-activities?page=" + str(args.page), None
     if args.command == "search":
         body = {"keyword": args.keyword}
         if args.source_id is not None:
@@ -96,6 +102,8 @@ def command_request(args):
     if args.command == "episodes":
         return "POST", "items/" + quote(args.id, safe="") + "/episodes", (
             {"lineId": args.line_id} if args.line_id else {})
+    if args.command == "open-playlist":
+        return "POST", "items/" + quote(args.id, safe="") + "/open", {}
     if args.command == "probe":
         return "POST", "episodes/" + quote(args.id, safe="") + "/probe", {}
     if args.command == "play":

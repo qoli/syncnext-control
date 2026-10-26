@@ -30,13 +30,15 @@ All paths below are relative to `/api/v1`. Responses are JSON with `Cache-Contro
 | `GET /status` | `apiVersion`, `ready`, `deviceName`, `capabilities`, `handleLifetime` |
 | `GET /sources` | `sources: [{id, name}]`; enabled searchable source snapshot |
 | `GET /history?page=1` | `page`, `pageSize: 1000`, `totalCount`, `nextPage`, `records`; saved playback history, newest first |
+| `GET /viewing-activities?page=1` | Same pagination envelope; persistent per-launch viewing activities with archived TMDB JSON; V2 required |
 | `POST /search` | `{keyword, sourceIds?}` → `202` search operation; omitted `sourceIds` searches all enabled sources |
 | `GET /operations/{id}` | Current operation snapshot, including partial search results while running |
 | `DELETE /operations/{id}` | Request cancellation; `cancelling` until work observes cancellation; never undoes playback already started |
 | `POST /items/{id}/episodes` | `{lineId?}` → `202` episode operation |
+| `POST /items/{id}/open` | `{}` → `200 {opened: true, itemId, title}` after presenting the App's playlist screen; does not start playback |
 | `POST /episodes/{id}/probe` | `{}` → `202` resolution and quality operation, without opening the player |
 | `POST /playback` | `{episodeId}` → `202` play operation; real player readiness determines success |
-| `GET /playback` | Real mounted player state, position, duration, media and seekability |
+| `GET /playback` | Real mounted player state, position, duration, media, seekability and detailed loaded-source specifications |
 | `POST /playback/stop` | `{}` → playback information after closing the mounted player; already idle succeeds |
 | `POST /playback/seek` | `{positionSeconds}`; finite nonnegative seconds → updated playback information |
 | `DELETE /session` | Cancel operations and invalidate item, line, episode and operation handles |
@@ -136,6 +138,10 @@ Client exit codes: `0` successful request/result (including an accepted cancella
 
 ## Episodes and source lines
 
+To open a search result on the TV, call `POST /items/ITEM_ID/open` or `open-playlist ITEM_ID`. The App presents the same `OpenUniversalViewbyList` screen used when selecting a work manually, including its normal metadata, episodes, source controls and loading/error behavior. `opened: true` confirms presentation only; it does not guarantee that the source has finished loading episodes or that playback is available. The API does not select an episode or start a player. The screen remains open after session clear, just as session clear leaves mounted playback running.
+
+`status.capabilities` includes `openPlaylist` when this route is supported. Unknown or invalidated item handles return `404 item_not_found`. A running media operation returns `409 operation_busy`; mounted playback returns `409 player_busy`, so stop it first. If no visible App view can present the screen, the request returns `409 ui_unavailable`. Unlike `episodes`, opening a playlist changes the TV UI and returns directly without an operation to poll.
+
 The episode operation's `result` is:
 
 ```json
@@ -149,6 +155,15 @@ The episode operation's `result` is:
 Line controls come from the existing source's episode panel actions. Some sources expose all lines in the episode list and return `lines: []`; use each episode's `line` in that case. For sources with panel actions, request episodes once to get line handles, then `episodes ITEM_ID --line-id LINE_ID` to select and refetch that line. It changes that source instance's selected line just as the App UI does. Returned episode handles retain their own handlers, so playback uses the chosen episode.
 
 The API serializes episode loading, resolution/probe and playback because existing source handlers may share selected-line and parser state. A second such operation receives `409 operation_busy`; search operations can run independently. A player already mounted receives `409 player_busy` on a new play request. Close it with `POST /playback/stop` before starting another. Session clear/cancellation does not stop an already mounted player.
+
+Before playback, the App prepares the selected handle's complete playlist snapshot
+through the same playback-order and fingerprint-topology preparation used by the
+episode screen. It selects the requested episode from that prepared list, preserving
+the episode's resolver and source line. Preparation happens at play time so earlier
+handles remain usable after inspecting other lines. Preparation failure fails the
+play operation before mounting a player. No playlist screen or TMDB network lookup
+is required. Intro/outro analysis retains its existing setting, duration and
+reference-fingerprint requirements.
 
 Plugin episode loading uses an owned JavaScript operation and preserves typed
 failures, stage and reason, including VidPlay detail HTTP errors. Other providers
@@ -196,6 +211,29 @@ python3 scripts/syncnext.py playback
 
 `GET /playback` returns `state` (`idle`, `loading`, `playing`, `paused`, `waiting`, `failed`), `media` (available `title`, `episode`, `sourceType`, `coverURL`), `positionSeconds`, `durationSeconds`, `rate`, `canSeek`, and `seekableRanges: [{startSeconds, endSeconds}]`. Without a mounted player the state is `idle`, media/time/rate are `null`, `canSeek` is false and ranges are empty. Unknown duration stays `null`. Seek targets must lie in a reported seekable range; the response reports the actual landing time and preserves playing/paused state. A `waiting` response can mean decoding/buffering is still pending. In the source checkout, the engine's owning reference is `Docs/SPEC/playback_http_runtime.md`.
 
+## Specifications of the current playback
+
+When `status.capabilities` includes `playbackDetails`, `GET /playback` also returns `details`. The existing `playback` client prints it without another command. `POST /playback/seek` returns the same current-source details; stop/idle returns `details: null`. The ungated legacy `/api/playback` endpoint uses the same playback response model.
+
+This reads the currently mounted Hybrid session and Aether's existing source metadata. It does not open another source, run another probe, or report the silent AVKit proxy carrier's specifications. Values update when the source or track selection changes. All unavailable properties are explicit `null`; empty track/chapter arrays mean no entries currently published by the engine.
+
+| Path | Fields |
+| --- | --- |
+| `details.format` | Container `name`, `durationSeconds`, `isLive`, title/artist/album tags |
+| `details.video` | Primary video codec, width/height, nominal frame rate, declared `bitrateBps`, pixel/display aspect ratio, source dynamic range and Dolby Vision profile |
+| `details.video.format` | Codec profile, pixel format, bit depth, color primaries, transfer function, matrix and range in FFmpeg names |
+| `details.audioTracks[]` | Stream ID, name, codec/profile, language, sample rate in Hz, channels/layout, bits per sample, sample format, bitrate, Atmos/DTS:X detections, disposition and current selection |
+| `details.subtitleTracks[]` | ID, name, codec, language, disposition, external/native-rendering flags and current selection |
+| `details.chapters[]` | ID, title, start/duration seconds and timeline (`playback` or `disc-title`) |
+| `details.playback` | Actual Hybrid/video routes, audio delivery, active decoders, display dynamic range, Dolby Vision conversion, decoded video format, pixel-buffer FourCC and selected track IDs |
+| `details.playback.telemetry` | Available instantaneous/mean media bitrate, audio bridge bitrate, network throughput, observed frame rate, dropped frames, buffer/cushion seconds, cache/reader-window bytes, AV sync gap and source bytes fetched |
+
+`disposition` reports default, forced, hearing-impaired and commentary flags. Built-in IDs generally correspond to FFmpeg stream indices; external subtitles have synthetic IDs. Unknown selection is `null`. `atmosDetected: false` and `dtsXDetected: false` mean no positive detection, not proof of absence. This query does not run optional detail detection. Missing color tags stay unknown; they are not filled from the renderer's SDR/BT.709 defaults.
+
+Keep source and output specifications distinct. The source can be Dolby Vision while the display/output is SDR. `decodedVideoFormat` is unknown on native AVPlayer, whose frames do not pass through Aether's software decoder. Native HLS can lack a container name and derives available stream properties from the actual AVPlayer item. Its bitrate telemetry can be declared variant bandwidth; do not describe it as measured bitrate. Media bitrate and network throughput describe different things on all paths.
+
+This is detailed loaded-session metadata rather than a full-file ffprobe scan. Unexposed fields such as file size, arbitrary tags, packet/frame counts, additional video streams and mastering side data remain unavailable. Source URLs, request headers, embedded artwork bytes and subtitle extradata are not included. The owning wire model is `SyncnextHybrid/Sources/SyncnextHybrid/HybridMediaInformation.swift`; the App runtime contract is `Docs/SPEC/playback_http_runtime.md`.
+
 ## Reproducible Simulator acceptance
 
 Build the Debug App for an arm64 tvOS Simulator with Xcode, then run from the repository:
@@ -204,12 +242,43 @@ Build the Debug App for an arm64 tvOS Simulator with Xcode, then run from the re
 python3 Scripts/run_local_agent_api_simulator.py --app /absolute/path/to/Debug-appletvsimulator/SyncNext.app
 ```
 
-The runner requires installed `ffmpeg` and the tvOS 27.0 Simulator runtime. It creates and deletes its own temporary Apple TV Simulator, with isolated HTTP/WebSocket ports. It never targets `SyncNext Data`. The native case checks empty history and the legacy scalar-field projection with offsets and a deliberately invalid restoration payload, then persists 1001 synthetic history records, including hidden episodes, tied timestamps and unknown time fields. The runner verifies the 1000/1 page boundary, stable tie ordering, no duplicate/missing records, progress values, exclusion of private fields, pages past the end and invalid page queries through the real HTTP listener and CLI. The fixture records are removed on case exit. It also generates MP4, HLS and MKV media and local VOD/T4/VidPlay fixtures, then drives this exact Skill client through search, episode choice, metadata probing, authenticated T4 resolution, real playback, seek, stop and switching to another source/episode. VidPlay fixtures exercise the bundled JavaScript and native bridge: wrapped HTTP 404/403 reasons must reach search and episode errors, sensitive diagnostics must be redacted, and successful empty searches and episode lists must retain their outcomes. It also checks idle stop, rejection of malformed stop requests, playback progress, partial/all-source errors, in-flight engine-probe cancellation, unknown IDs, token-free requests, disabled state and the bundled setup page. The native Debug case checks notification suppression/display and persistence, the App's source-diagnostic resolution label, selected episode, mounted AVPlayer clock progress and cleanup. Hybrid's AVKit carrier dimensions do not represent source resolution.
+The runner requires installed `ffmpeg`/`ffprobe` and the tvOS 27.0 Simulator runtime. It creates and deletes its own temporary Apple TV Simulator, with isolated HTTP/WebSocket ports. It never targets `SyncNext Data`. The native case checks empty history and the legacy scalar-field projection with offsets and a deliberately invalid restoration payload, then persists 1001 synthetic history records, including hidden episodes, tied timestamps and unknown time fields. The runner verifies the 1000/1 page boundary, stable tie ordering, no duplicate/missing records, progress values, exclusion of private fields, pages past the end and invalid page queries through the real HTTP listener and CLI. The fixture records are removed on case exit. It also generates MP4, HLS and MKV media and local VOD/T4/VidPlay fixtures, then drives this exact Skill client through search, playlist opening, episode choice, metadata probing, authenticated T4 resolution, real playback, seek, stop and switching to another source/episode. A multi-audio/subtitle/chapter MKV is played and its returned source specifications are compared with `ffprobe -show_format -show_streams -show_chapters`; seek retains details, switching refreshes them and stopping clears them. VidPlay fixtures exercise the bundled JavaScript and native bridge: wrapped HTTP 404/403 reasons must reach search and episode errors, sensitive diagnostics must be redacted, and successful empty searches and episode lists must retain their outcomes. It also checks playlist presentation without starting playback, rejection while a player is mounted, idle stop, rejection of malformed requests, playback progress, partial/all-source errors, in-flight engine-probe cancellation, unknown IDs, token-free requests, disabled state and the bundled setup page. The native Debug case checks the mounted playlist screen, notification suppression/display and persistence, the App's source-diagnostic resolution label, selected episode, mounted AVPlayer clock progress and cleanup. Hybrid's AVKit carrier dimensions do not represent source resolution.
 
-Evidence is retained under `.artifacts/local-agent-api/RUN_ID/` (JSON, fixture requests, App console). For visual acceptance, first create/boot a task-owned temporary device and attach its display with Xcode's device interaction session; pass `--temporary-simulator-udid UUID --await-ui-check`. The runner pauses first at `ui-stop-checkpoint.json` to inspect the closed player and then at `ui-checkpoint.json` to inspect the new playback. Capture the current screenshot/hierarchy for each, writing the corresponding `ui-stop-check.json` or `ui-check.json` containing `{"passed":true}` only after inspection, or `false` with the observed failure. End the interaction session before submitting the final check. The runner then completes native assertions and deletes the temporary device. Do not pass a shared or retained device: the temporary-UDID option transfers ownership for deletion.
+Evidence is retained under `.artifacts/local-agent-api/RUN_ID/` (JSON, fixture requests, App console). For visual acceptance, first create/boot a task-owned temporary device and attach its display with Xcode's device interaction session; pass `--temporary-simulator-udid UUID --await-ui-check`. The runner pauses at `ui-playlist-checkpoint.json` to inspect the playlist title and episode choices, then at `ui-stop-checkpoint.json` to inspect the closed player and finally at `ui-checkpoint.json` to inspect the new playback. Capture the current screenshot/hierarchy for each, writing the corresponding `ui-playlist-check.json`, `ui-stop-check.json` or `ui-check.json` containing `{"passed":true}` only after inspection, or `false` with the observed failure. End the interaction session before submitting the final check. The runner then completes native assertions and deletes the temporary device. Do not pass a shared or retained device: the temporary-UDID option transfers ownership for deletion.
 
-`python3 Tests/LocalAgent/test_client.py` separately verifies history page selection, URL-only connection without an authorization header, the stop request/response, partial-result exit codes, cancellation on interrupt, no resubmission after an HTTP error, and stopping observation without cancelling a playback operation. The source checkout's existing search/session and local-server tests cover their respective engines.
+`python3 Tests/LocalAgent/test_client.py` separately verifies history page selection, URL-only connection without an authorization header, the playlist-open and stop request/response, partial-result exit codes, cancellation on interrupt, no resubmission after an HTTP error, and stopping observation without cancelling a playback operation. The source checkout's existing search/session and local-server tests cover their respective engines.
 
 This acceptance proves the local App/Skill/engine flow with controlled sources. It does not prove availability of third-party subscriptions or physical Apple TV playback.
 
+Run `python3 Scripts/run_local_agent_api_simulator.py --app PATH/SyncNext.app --fingerprint-only`
+for the `LocalAgentFingerprint` native case. It uses the same isolated temporary-Simulator
+runner and a generated 600-second HLS source. Real HTTP search, T4 episode handles,
+resolution and playback run without opening an episode screen. The case verifies
+the complete prepared playlist, current episode identity, previous-episode topology,
+persisted front/back fingerprints and intro/outro matches against the first episode.
+It also replaces the topology between plays and verifies that a retained episode
+handle rebuilds its own complete snapshot at launch. Results and App console logs
+are retained in the run's `.artifacts/local-agent-api/RUN_ID/` folder.
+
 The separate Debug case `LocalAgentMDDProbe` exercises the live MDD source through search, episode loading and probing of `公主嫁到(粤)` episode 1. Launch with `--syncnext-acceptance-case=LocalAgentMDDProbe --syncnext-acceptance-run-id=UUID` after normal initialization. It requires the live upstream and any applicable MDD account access; it does not replace the controlled-source runner. It verifies support on all 32 episodes, actual Aether container/video measurements, and unchanged player state, headers and selection. JSON evidence is written under `Library/Caches/local-agent-mdd-probe/UUID/`, and the previous Agent API enabled setting is restored.
+
+## Viewing activities
+
+`GET /viewing-activities?page=1` is a local, read-only archive query, advertised by
+`viewingActivities`. It uses the same page/nextPage contract as history, sorted by
+start time descending and UUID ascending. `409 unsupported_database` means V2 is
+required. Unknown query parameters and invalid pages return `400 invalid_page`.
+
+Each record carries all 23 fields documented in
+`Docs/SPEC/playback_http_runtime.md`: its `activityID`, start/end/last-observation
+times, content/source identity and name snapshots, TMDB coordinates and archived
+`tmdbSnapshotJSON` object, metadata timestamp/language, immutable confirmed A,
+latest B, actual resource duration, `activePlaybackSeconds`, and a
+`rateDurationsJSON` object mapping observed rates to effective wall seconds.
+Unknown values are explicit JSON nulls. The query never downloads metadata.
+
+Resume checkpoint deletion and cache clearing leave activities and their JSON
+intact. Activities begin with this feature; legacy checkpoints cannot reconstruct
+past A/end times, watch duration, rates, or launch count. An activity may be a
+continuation, so count does not establish replay count. Short playback does not
+establish dislike or abandonment. No seek events or start/end reasons are stored.
