@@ -27,7 +27,7 @@ All paths below are relative to `/api/v1`. Responses are JSON with `Cache-Contro
 
 | Method and path | Body / response |
 | --- | --- |
-| `GET /status` | `apiVersion`, `ready`, `deviceName`, `capabilities`, `handleLifetime` |
+| `GET /status` | `apiVersion`, `ready`, `deviceName`, `capabilities`, `probeTimeout`, `handleLifetime` |
 | `GET /sources` | `sources: [{id, name}]`; enabled searchable source snapshot |
 | `GET /history?page=1` | `page`, `pageSize: 1000`, `totalCount`, `nextPage`, `records`; saved playback history, newest first |
 | `GET /viewing-activities?page=1` | Same pagination envelope; persistent per-launch viewing activities with archived TMDB JSON; V2 required |
@@ -36,7 +36,7 @@ All paths below are relative to `/api/v1`. Responses are JSON with `Cache-Contro
 | `DELETE /operations/{id}` | Request cancellation; `cancelling` until work observes cancellation; never undoes playback already started |
 | `POST /items/{id}/episodes` | `{lineId?}` → `202` episode operation |
 | `POST /items/{id}/open` | `{}` → `200 {opened: true, itemId, title}` after presenting the App's playlist screen; does not start playback |
-| `POST /episodes/{id}/probe` | `{}` → `202` resolution and quality operation, without opening the player |
+| `POST /episodes/{id}/probe` | `{timeoutSeconds?}` → `202` resolution and quality operation, without opening the player; default 30, maximum 600 seconds |
 | `POST /playback` | `{episodeId}` → `202` play operation; real player readiness determines success |
 | `GET /playback` | Real mounted player state, position, duration, media, seekability and detailed loaded-source specifications |
 | `POST /playback/stop` | `{}` → playback information after closing the mounted player; already idle succeeds |
@@ -178,7 +178,9 @@ Item/episode/line handles are process-local and invalidate on background entry, 
 
 The probe invokes the chosen episode's existing resolver, preserving its required HTTP headers, then calls Hybrid's AetherEngine demux-only FFmpeg probe on a background task. HLS input uses the engine's existing reader. It does not create a playback session, AVPlayer/AVPlayerItem, renderer or audio session. Cancellation is forwarded through the engine's probe cancellation token. MDD, normal HTTP VOD, T4 and website/embedded cat plugin episodes expose resolvers. MDD uses the same `mddPlay` / `tryMaxStream` URL selection and source headers as playback, without changing the player's global headers or selected episode. A missing MDD media URL fails with `resolution_failed`; login, entitlement and upstream availability still apply. Other episode providers return `probeSupported: false` and `422 probe_unsupported`. Resolution/container errors produce failed operations; missing stream metadata stays unknown. The App does not implement a second media parser.
 
-Metadata inspection has a fixed 30-second monotonic deadline, starting before the engine's first input operation and excluding episode URL resolution. The engine interrupts its I/O and finishes cleanup before the operation becomes `failed` with `errors[].code: "probe_timeout"` and no measured result. Explicit cancellation remains `cancelled`. The existing engine probe depth is retained; the App adds only the time limit. This deadline is separate from the client's per-request and observation timeouts.
+Agents can negotiate the metadata inspection deadline by submitting `{"timeoutSeconds": 120}`. `GET /status` advertises `probeTimeout: {"defaultSeconds": 30, "maxSeconds": 600}`. Omission retains 30 seconds; a supplied value must be a finite positive JSON number at most 600 seconds (fractional seconds are allowed). Zero, negative, over-limit, boolean, string and null values return `400 invalid_timeout`; the App does not silently clamp them. The accepted `202` operation and all later snapshots echo the effective `timeoutSeconds`, including failed and cancelled operations. The client command is `probe EPISODE_ID --timeout-seconds 120`.
+
+This monotonic deadline starts before the engine's first input operation and excludes episode URL resolution. The engine interrupts its I/O and finishes cleanup before the operation becomes `failed` with `errors[].code: "probe_timeout"` and no measured result. Explicit cancellation remains `cancelled`. The existing engine probe depth is retained; the App adds only the negotiated time limit. This deadline is separate from the client's per-request and observation timeouts; `--request-timeout` does not change it, and `--wait-timeout` can stop observing before the probe finishes without cancelling it.
 
 The probe's `result` separates `declared` episode/line labels from `measured` data:
 
@@ -246,7 +248,9 @@ The runner requires installed `ffmpeg`/`ffprobe` and the tvOS 27.0 Simulator run
 
 Evidence is retained under `.artifacts/local-agent-api/RUN_ID/` (JSON, fixture requests, App console). For visual acceptance, first create/boot a task-owned temporary device and attach its display with Xcode's device interaction session; pass `--temporary-simulator-udid UUID --await-ui-check`. The runner pauses at `ui-playlist-checkpoint.json` to inspect the playlist title and episode choices, then at `ui-stop-checkpoint.json` to inspect the closed player and finally at `ui-checkpoint.json` to inspect the new playback. Capture the current screenshot/hierarchy for each, writing the corresponding `ui-playlist-check.json`, `ui-stop-check.json` or `ui-check.json` containing `{"passed":true}` only after inspection, or `false` with the observed failure. End the interaction session before submitting the final check. The runner then completes native assertions and deletes the temporary device. Do not pass a shared or retained device: the temporary-UDID option transfers ownership for deletion.
 
-`python3 Tests/LocalAgent/test_client.py` separately verifies history page selection, URL-only connection without an authorization header, the playlist-open and stop request/response, partial-result exit codes, cancellation on interrupt, no resubmission after an HTTP error, and stopping observation without cancelling a playback operation. The source checkout's existing search/session and local-server tests cover their respective engines.
+The runner also verifies the advertised timeout policy, backward-compatible 30-second default, acceptance of 600 seconds, effective-timeout echoes, rejection of invalid values, a fractional-second deadline, success after a fixture takes over 30 seconds with a 60-second budget, and cancellation under a 600-second budget.
+
+`python3 Tests/LocalAgent/test_client.py` separately verifies history page selection, URL-only connection without an authorization header, the playlist-open and stop request/response, probe timeout submission and validation, partial-result exit codes, cancellation on interrupt, no resubmission after an HTTP error, and stopping observation without cancelling a playback operation. The source checkout's existing search/session and local-server tests cover their respective engines.
 
 This acceptance proves the local App/Skill/engine flow with controlled sources. It does not prove availability of third-party subscriptions or physical Apple TV playback.
 

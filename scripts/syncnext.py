@@ -3,6 +3,7 @@
 
 import argparse
 import json
+import math
 import os
 import sys
 import time
@@ -82,6 +83,9 @@ def parser():
     for name in ("probe", "play", "operation", "cancel"):
         command = commands.add_parser(name)
         command.add_argument("id")
+        if name == "probe":
+            command.add_argument("--timeout-seconds", type=float,
+                                 help="App metadata probe deadline in seconds, >0 and <=600 (default: 30)")
     seek = commands.add_parser("seek")
     seek.add_argument("seconds", type=float)
     return result
@@ -105,7 +109,13 @@ def command_request(args):
     if args.command == "open-playlist":
         return "POST", "items/" + quote(args.id, safe="") + "/open", {}
     if args.command == "probe":
-        return "POST", "episodes/" + quote(args.id, safe="") + "/probe", {}
+        body = {}
+        if args.timeout_seconds is not None:
+            if not math.isfinite(args.timeout_seconds) or not 0 < args.timeout_seconds <= 600:
+                raise ClientError({"error": {"code": "invalid_timeout",
+                                            "message": "Probe timeout must be finite, positive and no greater than 600 seconds."}})
+            body["timeoutSeconds"] = args.timeout_seconds
+        return "POST", "episodes/" + quote(args.id, safe="") + "/probe", body
     if args.command == "play":
         return "POST", "playback", {"episodeId": args.id}
     if args.command == "stop":
