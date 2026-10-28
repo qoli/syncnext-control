@@ -39,6 +39,7 @@ All paths below are relative to `/api/v1`. Responses are JSON with `Cache-Contro
 | `POST /episodes/{id}/probe` | `{timeoutSeconds?}` → `202` resolution and quality operation, without opening the player; default 30, maximum 600 seconds |
 | `POST /playback` | `{episodeId}` → `202` play operation; real player readiness determines success |
 | `GET /playback` | Real mounted player state, position, duration, media, seekability and detailed loaded-source specifications |
+| `GET /playback/music-recognition` | `songs: [{id, title, artist, artworkURL}]`; retained confirmed songs for the current media, newest first |
 | `POST /playback/stop` | `{}` → playback information after closing the mounted player; already idle succeeds |
 | `POST /playback/seek` | `{positionSeconds}`; finite nonnegative seconds → updated playback information |
 | `DELETE /session` | Cancel operations and invalidate item, line, episode and operation handles |
@@ -213,6 +214,38 @@ python3 scripts/syncnext.py playback
 
 `GET /playback` returns `state` (`idle`, `loading`, `playing`, `paused`, `waiting`, `failed`), `media` (available `title`, `episode`, `sourceType`, `coverURL`), `positionSeconds`, `durationSeconds`, `rate`, `canSeek`, and `seekableRanges: [{startSeconds, endSeconds}]`. Without a mounted player the state is `idle`, media/time/rate are `null`, `canSeek` is false and ranges are empty. Unknown duration stays `null`. Seek targets must lie in a reported seekable range; the response reports the actual landing time and preserves playing/paused state. A `waiting` response can mean decoding/buffering is still pending. In the source checkout, the engine's owning reference is `Docs/SPEC/playback_http_runtime.md`.
 
+## Music recognition results for the current media
+
+When `status.capabilities` includes `musicRecognition`, use
+`GET /playback/music-recognition` or `python3 scripts/syncnext.py music`.
+
+```json
+{
+  "songs": [{
+    "id": "shazam:123",
+    "title": "Example song",
+    "artist": "Example artist",
+    "artworkURL": null
+  }]
+}
+```
+
+This reads the same in-memory results as the player's Music tab. The existing
+recognition policy publishes a song after three consecutive matches and retains
+up to five distinct songs, most recently confirmed first. Repeated matches update
+metadata and move the song to the front. IDs retain their `shazam:`, `isrc:` or
+`apple:` prefix. Missing artwork is explicit `null`.
+
+The first entry is the most recently confirmed song, not a guarantee that it is
+still audible. No timestamps, media positions or cross-media archive are stored.
+Pause, seek and disabling recognition preserve the retained results; leaving or
+switching media, or releasing the complete playback session, clears them.
+No mounted player or no retained results returns `200 {"songs": []}`.
+
+The endpoint shares the API-enabled and initialization gates, remains quiet, and
+uses `Cache-Control: no-store`. Reading it does not start recognition, change
+playback or create another results store.
+
 ## Specifications of the current playback
 
 When `status.capabilities` includes `playbackDetails`, `GET /playback` also returns `details`. The existing `playback` client prints it without another command. `POST /playback/seek` returns the same current-source details; stop/idle returns `details: null`. The ungated legacy `/api/playback` endpoint uses the same playback response model.
@@ -250,7 +283,7 @@ Evidence is retained under `.artifacts/local-agent-api/RUN_ID/` (JSON, fixture r
 
 The runner also verifies the advertised timeout policy, backward-compatible 30-second default, acceptance of 600 seconds, effective-timeout echoes, rejection of invalid values, a fractional-second deadline, success after a fixture takes over 30 seconds with a 60-second budget, and cancellation under a 600-second budget.
 
-`python3 Tests/LocalAgent/test_client.py` separately verifies history page selection, URL-only connection without an authorization header, the playlist-open and stop request/response, probe timeout submission and validation, partial-result exit codes, cancellation on interrupt, no resubmission after an HTTP error, and stopping observation without cancelling a playback operation. The source checkout's existing search/session and local-server tests cover their respective engines.
+`python3 Tests/LocalAgent/test_client.py` separately verifies history page selection, URL-only connection without an authorization header, the playlist-open and stop request/response, the music GET request and ordered/empty results without polling, probe timeout submission and validation, partial-result exit codes, cancellation on interrupt, no resubmission after an HTTP error, and stopping observation without cancelling a playback operation. The source checkout's existing search/session and local-server tests cover their respective engines.
 
 This acceptance proves the local App/Skill/engine flow with controlled sources. It does not prove availability of third-party subscriptions or physical Apple TV playback.
 

@@ -68,6 +68,7 @@ def parser():
     commands = result.add_subparsers(dest="command", required=True)
     for name in ("status", "sources", "playback", "stop", "clear"):
         commands.add_parser(name)
+    commands.add_parser("music", help="Read retained music recognition results for the current media")
     for name, help_text in (("history", "Read resume checkpoints"),
                             ("activities", "Read viewing activities with archived TMDB JSON")):
         history = commands.add_parser(name, help=help_text + ", 1000 records per page")
@@ -94,6 +95,8 @@ def parser():
 def command_request(args):
     if args.command in ("status", "sources", "playback"):
         return "GET", args.command, None
+    if args.command == "music":
+        return "GET", "playback/music-recognition", None
     if args.command == "history":
         return "GET", "history?page=" + str(args.page), None
     if args.command == "activities":

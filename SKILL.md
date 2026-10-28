@@ -1,6 +1,6 @@
 ---
 name: syncnext-control
-description: Search the user's running Syncnext, open a work's playlist on the TV, read paged playback history, inspect episodes and source quality, start or stop playback, and query playback through its local HTTP API. Use for media tasks on a reachable Syncnext instance.
+description: Search the user's running Syncnext, open a work's playlist on the TV, read paged playback history and current-media music recognition results, inspect episodes and source quality, start or stop playback, and query playback through its local HTTP API. Use for media tasks on a reachable Syncnext instance.
 ---
 
 # Syncnext Control
@@ -26,8 +26,11 @@ python3 scripts/syncnext.py episodes ITEM_ID
 python3 scripts/syncnext.py probe EPISODE_ID
 python3 scripts/syncnext.py play EPISODE_ID
 python3 scripts/syncnext.py playback
+python3 scripts/syncnext.py music
 python3 scripts/syncnext.py stop
 ```
+
+Use `music` to read the current media's retained music recognition results (`musicRecognition` capability). `songs` contains up to five confirmed songs, newest first, with `id`, `title`, `artist` and nullable `artworkURL`. The first entry is the most recently confirmed song, not proof that it is still audible. Repeated matches refresh and reorder the same song. Pause, seek and disabling recognition preserve results; leaving or switching media clears them. No player or no retained results returns an empty array. This is a read of existing results and does not start recognition.
 
 Use IDs returned by this App instance. Items, episodes and lines are temporary handles; request fresh results after an App restart, background transition, API disable, or session clear. Source IDs identify enabled sources without exposing subscription URLs. `search --source-id ID` restricts the search to that source; repeat it to select several. Without the flag, the App searches all enabled searchable sources.
 

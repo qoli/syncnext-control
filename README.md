@@ -1,6 +1,6 @@
 # Syncnext Control
 
-讓本地 Agent 使用 Syncnext 的播放歷史、搜尋、打開播放列表、來源品質探測、選集、播放、關閉播放及播放狀態 API。
+讓本地 Agent 使用 Syncnext 的播放歷史、當前媒體的音樂識別結果、搜尋、打開播放列表、來源品質探測、選集、播放、關閉播放及播放狀態 API。
 
 需要支援無令牌本地 HTTP API v1 的 Syncnext，以及 Python 3.10 以上版本；client 只使用 Python 標準庫。
 
@@ -68,6 +68,17 @@ python3 scripts/syncnext.py activities --page 2
 
 每頁固定最多 1000 筆，從第 1 頁開始；依回應的 `nextPage` 繼續讀取，直到 `null`。
 紀錄保存的是續播位置，不能把播放位置當作實際觀看時長，或把紀錄筆數當作觀看次數。
+
+讀取當前媒體保留的音樂識別結果：
+
+```bash
+python3 scripts/syncnext.py music
+```
+
+需要 `status.capabilities` 包含 `musicRecognition`。回傳 `songs`，最多 5 首、最新在前，
+包含 `id`、`title`、`artist` 與可為 `null` 的 `artworkURL`。
+第一首代表最近一次確認，不能當作此刻仍在播放的歌曲。沒有播放器或尚無結果時回傳空陣列。
+暫停、seek、停用辨識保留結果；退出或換片清除。
 
 ## 維護
 
