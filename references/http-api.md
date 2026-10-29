@@ -30,7 +30,7 @@ All paths below are relative to `/api/v1`. Responses are JSON with `Cache-Contro
 | `GET /status` | `apiVersion`, `ready`, `deviceName`, `capabilities`, `probeTimeout`, `handleLifetime` |
 | `GET /sources` | `sources: [{id, name}]`; enabled searchable source snapshot |
 | `GET /history?page=1` | `page`, `pageSize: 1000`, `totalCount`, `nextPage`, `records`; saved playback history, newest first |
-| `GET /viewing-activities?page=1` | Same pagination envelope; persistent per-launch viewing activities with archived TMDB JSON; V2 required |
+| `GET /viewing-activities?page=1` | Same pagination envelope plus `archiveStartAt`; persistent per-launch viewing activities with archived TMDB JSON; V2 required |
 | `POST /search` | `{keyword, sourceIds?}` → `202` search operation; omitted `sourceIds` searches all enabled sources |
 | `GET /operations/{id}` | Current operation snapshot, including partial search results while running |
 | `DELETE /operations/{id}` | Request cancellation; `cancelling` until work observes cancellation; never undoes playback already started |
@@ -192,11 +192,15 @@ The probe's `result` separates `declared` episode/line labels from `measured` da
 | `method`, `measuredAt` | `aether-ffmpeg`, timestamp of this inspection |
 | `containerOpened` | FFmpeg opened the container and read stream information; not proof of decoded playback |
 | `videoTracks` | Source width/height, codec, frame rate, bit depth, pixel format, profile, color primaries, transfer and dynamic range |
-| `audioTracks` | Codec, channel count, language and declared audio bitrate where available |
+| `audioTracks` | Stream `id`, `name`, codec, channel count, raw language, declared audio bitrate where available, and `disposition` flags |
 | `durationSeconds` | Known positive duration, otherwise `null` |
 | `probeElapsedSeconds` | Resolver-independent metadata inspection time, not startup latency |
 | `throughputBytesPerSecond` | `null`; this version does not measure sustained throughput |
 | `limitations` | Limits of metadata-only inspection |
+
+Each `audioTracks[]` entry preserves Aether's `id` (FFmpeg stream index), `name`, `codec`, `channels`, `language` and `bitrateBps`, with `disposition: {isDefault, isForced, isHearingImpaired, isCommentary}` matching the playback-details field names. `name` contains the container track title when available, otherwise the engine's display label. It can retain labels such as “粵語” or “台配” even when the language tag is missing or only says Chinese. Older App versions may omit `id`, `name` and `disposition`; missing fields remain unknown.
+
+Language tags and names are source metadata, not verification of the spoken audio. `language` is passed through without inferring a code from the title: `null`, empty and `und` mean unknown, not that a requested language is absent. `chi`/`zho`/`zh` alone does not distinguish Cantonese, Mandarin or a Taiwanese dub. Names can provide source-declared labels, but missing or conflicting tags/names remain unknown or ambiguous. Codec, bitrate and channel count cannot identify a language. Probe IDs belong to the inspected source; playback resolves the episode again, so compare the current `playback.details` rather than assuming the same IDs or tracks. The current API does not select audio tracks.
 
 Dynamic range comes from Aether's source metadata; an untagged SDR default remains unknown when transfer information is absent. The base probe does not run the optional Atmos/HDR10+ detail passes. Aether's public source probe does not expose video bitrate, so `estimatedBitrateBps` remains `null`; it is not replaced by network speed or a source label. The API provides no fabricated quality score and does not promise exhaustive adaptive variant inspection or decoded compatibility on another device.
 
@@ -285,6 +289,8 @@ Evidence is retained under `.artifacts/local-agent-api/RUN_ID/` (JSON, fixture r
 
 The runner also verifies the advertised timeout policy, backward-compatible 30-second default, acceptance of 600 seconds, effective-timeout echoes, rejection of invalid values, a fractional-second deadline, success after a fixture takes over 30 seconds with a 60-second budget, and cancellation under a 600-second budget.
 
+The runner also compares probe audio IDs, names, raw languages and all four disposition flags against `ffprobe` for MP4 and MKV fixtures. The audio-label fixture covers distinct “台配” and “粵語” names with the same `chi` tag, a “國語” name without a language tag, and a track without either tag. Missing languages stay `null`; the MP4's `und` is preserved. The tagged MKV's probe and playback details must agree on IDs, names, languages and dispositions without inferring language codes.
+
 `python3 Tests/LocalAgent/test_client.py` separately verifies history page selection, URL-only connection without an authorization header, the playlist-open and stop request/response, the music GET request and ordered/empty results without polling, probe timeout submission and validation, partial-result exit codes, cancellation on interrupt, no resubmission after an HTTP error, and stopping observation without cancelling a playback operation. The source checkout's existing search/session and local-server tests cover their respective engines.
 
 This acceptance proves the local App/Skill/engine flow with controlled sources. It does not prove availability of third-party subscriptions or physical Apple TV playback.
@@ -307,6 +313,11 @@ The separate Debug case `LocalAgentMDDProbe` exercises the live MDD source throu
 `viewingActivities`. It uses the same page/nextPage contract as history, sorted by
 start time descending and UUID ascending. `409 unsupported_database` means V2 is
 required. Unknown query parameters and invalid pages return `400 invalid_page`.
+
+`totalCount` is the number of currently stored activities. `archiveStartAt` is the
+earliest `startedAt` among all currently stored activities, formatted as an ISO 8601
+timestamp, or `null` when none are stored. It is independent of the requested page,
+including pages beyond the last record.
 
 Each record carries all 23 fields documented in
 `Docs/SPEC/playback_http_runtime.md`: its `activityID`, start/end/last-observation
