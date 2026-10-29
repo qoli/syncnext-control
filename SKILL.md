@@ -38,6 +38,8 @@ For viewing-preference analysis, use `activities` and follow `nextPage` until it
 
 Use `history` for saved resume checkpoints, including older episodes hidden from the home screen, and follow its `nextPage` too. Positions/progress do not measure viewing time, record counts do not measure repeat views, and `playedAt` is the saved playback-start timestamp. The technical `sourceType` is not a provider identity. Each paged request reads current data, so concurrent writes can shift page boundaries.
 
+History records can be deleted. If a title is absent from the queried `history` or `activities` records, report that no matching record was found; do not classify the title as unwatched.
+
 Search results are candidates, not proof of the intended work. Match title and the available year/description, then fetch episodes. Resolve ambiguity that changes the work or episode before playing. When the user has asked for a specific work and episode and the match is clear, execute playback within that request. Successful `play` means the real player reached readiness; query `playback` to report its current state and progress.
 
 When asked to open a work's playlist on the TV, use `open-playlist ITEM_ID` with the matched search result. It presents the App's normal playlist screen without choosing or playing an episode. `opened: true` confirms screen presentation; episode loading and source errors remain in the normal App UI. `episodes ITEM_ID` only returns data to the Agent. If a player is mounted, `stop` first. Check `status.capabilities` for `openPlaylist` when working with an older App.

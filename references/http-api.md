@@ -101,6 +101,8 @@ Only the listed record fields are exported. Resolved playback URLs, credentials,
 source extension data, restoration payloads, screenshots and local paths are
 excluded. `status.capabilities` advertises `history` on supporting App versions.
 
+History records can be deleted. If a title is absent from the queried `history` or `activities` records, report that no matching record was found; do not classify the title as unwatched.
+
 ## Asynchronous operations
 
 Search, episode loading, resolution/probe and playback return `202` immediately:
