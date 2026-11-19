@@ -31,7 +31,7 @@ All paths below are relative to `/api/v1`. Responses are JSON with `Cache-Contro
 | `GET /sources` | `sources: [{id, name}]`; enabled searchable source snapshot |
 | `GET /history?page=1` | `page`, `pageSize: 1000`, `totalCount`, `nextPage`, `records`; saved playback history, newest first |
 | `GET /viewing-activities?page=1` | Same pagination envelope plus `archiveStartAt`; persistent per-launch viewing activities with archived TMDB JSON; V2 required |
-| `POST /search` | `{keyword, sourceIds?}` → `202` search operation; omitted `sourceIds` searches all enabled sources |
+| `POST /search` | `{keyword, sourceIds?}` → `202` search operation; omitted `sourceIds` searches enabled sources that allow global search |
 | `GET /operations/{id}` | Current operation snapshot, including partial search results while running |
 | `DELETE /operations/{id}` | Request cancellation; `cancelling` until work observes cancellation; never undoes playback already started |
 | `POST /items/{id}/episodes` | `{lineId?}` → `202` episode operation |
@@ -43,6 +43,10 @@ All paths below are relative to `/api/v1`. Responses are JSON with `Cache-Contro
 | `POST /playback/stop` | `{}` → playback information after closing the mounted player; already idle succeeds |
 | `POST /playback/seek` | `{positionSeconds}`; finite nonnegative seconds → updated playback information |
 | `DELETE /session` | Cancel operations and invalidate item, line, episode and operation handles |
+
+Channel settings can prohibit a source from global search. `GET /sources` still
+lists that searchable source, and explicitly selecting its ID in `sourceIds`
+allows the requested search. The prohibition applies when `sourceIds` is omitted.
 
 Source IDs are hashes of the App's source identity, so subscription URLs containing credentials need not leave the App. Unknown requested source IDs fail explicitly with `source_not_found`; the App never broadens a restricted search. Source settings are read anew for each search. Source ordering is not a quality ranking.
 
